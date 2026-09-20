@@ -1,0 +1,194 @@
+x-worker: &worker
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.worker
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+    execution-store:
+      condition: service_started
+    minio:
+      condition: service_started
+  environment: &worker-env
+    NODE_ENV: development
+    RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: 5432
+    POSTGRES_DB: automation
+    POSTGRES_USER: automation
+    POSTGRES_PASSWORD: automation
+    DUMMY_APP_URL: http://dummy-app:4173
+    EXECUTION_STORE_URL: http://execution-store:3100
+    MINIO_ENDPOINT: minio
+    MINIO_PORT: 9000
+    MINIO_ACCESS_KEY: minioadmin
+    MINIO_SECRET_KEY: minioadmin
+    MINIO_BUCKET: artifacts
+    WORKER_CONCURRENCY: 2
+    DUMMY_FAILURE_RATE: 0.02
+    DUMMY_FLAKY_RATE: 0.01
+    MAX_RETRIES: 2
+    DEFAULT_BROWSER: chromium
+  volumes:
+    - ../tests:/app/tests
+    - ../playwright.config.ts:/app/playwright.config.ts
+  command: ['npm', 'run', 'worker']
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: automation-rabbitmq
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', 'ping']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: automation-postgres
+    environment:
+      POSTGRES_DB: automation
+      POSTGRES_USER: automation
+      POSTGRES_PASSWORD: automation
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U automation -d automation']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: automation-minio
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  dummy-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dummy-app
+    container_name: automation-dummy-app
+    ports:
+      - '4173:4173'
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.orchestrator
+    container_name: automation-orchestrator
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: automation
+      POSTGRES_USER: automation
+      POSTGRES_PASSWORD: automation
+      DUMMY_APP_URL: http://dummy-app:4173
+      TEST_COUNT: 10000
+      WORKER_REPLICAS: 5
+      WORKER_CONCURRENCY: 2
+      MAX_CONCURRENT_TESTS: 10
+      DEFAULT_BROWSER: chromium
+    ports:
+      - '3000:3000'
+    volumes:
+      - ../tests:/app/tests
+    command: ['npm', 'run', 'orchestrator']
+
+  execution-store:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.execution-store
+    container_name: automation-execution-store
+    ports:
+      - '3100:3100'
+    environment:
+      EXECUTION_STORE_PORT: 3100
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: automation
+      POSTGRES_USER: automation
+      POSTGRES_PASSWORD: automation
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: ['npm', 'run', 'execution-store']
+
+  worker-1:
+    <<: *worker
+    container_name: infra-worker-1
+    hostname: worker-1
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-1
+
+  worker-2:
+    <<: *worker
+    container_name: infra-worker-2
+    hostname: worker-2
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-2
+
+  worker-3:
+    <<: *worker
+    container_name: infra-worker-3
+    hostname: worker-3
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-3
+
+  worker-4:
+    <<: *worker
+    container_name: infra-worker-4
+    hostname: worker-4
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-4
+
+  worker-5:
+    <<: *worker
+    container_name: infra-worker-5
+    hostname: worker-5
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-5
+
+volumes:
+  postgres-data:
+  minio-data:
